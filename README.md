@@ -5,7 +5,7 @@ Confidence layer v1 with:
 - preprocessing pipeline (normalization + tokenization)
 - deterministic dependency-free embedding pipeline (stable hashed embeddings)
 - dedicated OoD/UE module with calibration + threshold fitting
-- OoD + uncertainty + message-risk prediction
+- message-risk classifier + rule signals fused into one risk score
 
 ## Files
 
@@ -13,7 +13,8 @@ Confidence layer v1 with:
 - `label_policy.md`: label/action policy and threshold profile definitions.
 - `preprocessing.py`: text preprocessing and embedding pipeline.
 - `ood_ue.py`: dedicated OoD/UE detector, calibrator, and threshold fitting utilities.
-- `confidence_layer.py`: main inference engine.
+- `message_risk.py`: lightweight message-risk classifier and bootstrap trainer.
+- `confidence_layer.py`: main inference engine with fused risk scoring.
 - `api.py`: HTTP server exposing prediction endpoint.
 
 ## Run API
@@ -27,14 +28,6 @@ Server endpoints:
 - `GET /health`
 - `GET /schema`
 - `POST /predict-confidence-risk`
-
-Example request:
-
-```bash
-curl -s -X POST http://localhost:8080/predict-confidence-risk \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Urgent! Click here and send your OTP","profile":"strict"}'
-```
 
 ## Calibration + thresholds
 

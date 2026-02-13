@@ -15,6 +15,12 @@ Each prediction MUST return:
 - `action` (`"allow" | "warn" | "block" | "escalate"`): product decision.
 - `profile` (`"strict" | "balanced" | "lenient"`): threshold profile used.
 
+## Risk scoring policy (fused)
+
+- Rule signals detect explicit high-risk patterns (credentials, payment transfer, phishing CTA, PII exfiltration, link+account prompts).
+- Classifier score estimates semantic risk from hashed embedding features.
+- Final risk score is fused as: `0.6 * classifier_score + 0.4 * rule_score`.
+
 ## OoD / UE module
 
 - OoD is produced by a dedicated `OodUeDetector` over calibrated in-domain score.

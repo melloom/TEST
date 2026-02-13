@@ -5,6 +5,7 @@ import re
 from typing import Dict, Iterable, List, Tuple
 
 from preprocessing import HashingEmbedder, PreprocessedMessage, Preprocessor
+from message_risk import MessageRiskClassifier, default_bootstrap_samples
 from ood_ue import OodUeDetector, OodUeThresholds
 from schema import Prediction, ProfileLabel, validate_profile
 
@@ -44,6 +45,9 @@ class ConfidenceRiskEngine:
             for name, cfg in self._PROFILES.items()
         }
 
+        self._risk_classifier = MessageRiskClassifier(embed_dim=embed_dim)
+        self._risk_classifier.fit(default_bootstrap_samples(), lr=0.4, epochs=40)
+
         self._high_risk_patterns: List[Tuple[str, str, float]] = [
             (r"\b(password|otp|one\s*time\s*passcode|2fa\s*code)\b", "requests sensitive authentication information", 0.42),
             (r"\b(urgent|immediately|asap|right\s*now)\b", "uses urgency language", 0.16),
@@ -77,12 +81,12 @@ class ConfidenceRiskEngine:
         ood_eval, ood_reason = self._ood_uncertainty(msg.tokens, embedding, selected)
         is_ood = ood_eval.is_ood
         uncertainty = ood_eval.uncertainty_score
-        risk_score, reasons = self._risk_score(msg)
+        fused_risk_score, reasons = self._risk_score(msg)
 
         if ood_reason:
             reasons.insert(0, ood_reason)
 
-        risk_label = self._risk_label(risk_score, caution=cfg["caution"], high_risk=cfg["high_risk"])
+        risk_label = self._risk_label(fused_risk_score, caution=cfg["caution"], high_risk=cfg["high_risk"])
         warn_threshold = self._ood_detectors[selected].thresholds.uncertainty_warn_threshold
         action = self._action(risk_label, is_ood, uncertainty, warn_threshold)
 
@@ -90,7 +94,7 @@ class ConfidenceRiskEngine:
             is_ood=is_ood,
             uncertainty_score=uncertainty,
             risk_label=risk_label,
-            risk_score=risk_score,
+            risk_score=fused_risk_score,
             reasons=reasons or ["no strong risk signals were found"],
             action=action,
             profile=selected,
@@ -126,29 +130,37 @@ class ConfidenceRiskEngine:
 
     def _risk_score(self, msg: PreprocessedMessage) -> Tuple[float, List[str]]:
         lowered = msg.normalized
-        score = 0.0
+        rule_score = 0.0
         reasons: List[str] = []
 
         for pattern, reason, weight in self._high_risk_patterns:
             if re.search(pattern, lowered):
-                score += weight
+                rule_score += weight
                 reasons.append(reason)
 
         if len(msg.raw) > 280:
-            score += 0.05
+            rule_score += 0.05
             reasons.append("long-form message can hide mixed intent")
 
         punctuation_burst = msg.raw.count("!") + msg.raw.count("?")
         if punctuation_burst >= 4:
-            score += 0.10
+            rule_score += 0.10
             reasons.append("high punctuation intensity")
 
         if re.search(r"<url>", lowered) and re.search(r"\b(login|verify|account|secure)\b", lowered):
-            score += 0.15
+            rule_score += 0.15
             reasons.append("link combined with account-security prompt")
 
-        score = 1 - math.exp(-score)
-        return self._clamp(score), reasons
+        rule_prob = self._clamp(1 - math.exp(-rule_score))
+        clf_prob = self._risk_classifier.predict_score_from_message(msg)
+
+        # fused score: classifier captures semantic context; rules enforce explicit safety signals
+        fused = self._clamp(0.6 * clf_prob + 0.4 * rule_prob)
+
+        if clf_prob >= 0.65 and "classifier semantic risk signal" not in reasons:
+            reasons.append("classifier semantic risk signal")
+
+        return fused, reasons
 
     @staticmethod
     def _risk_label(score: float, caution: float, high_risk: float) -> str:

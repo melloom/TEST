@@ -47,6 +47,11 @@ class ConfidenceLayerTests(unittest.TestCase):
         result = self.engine.predict("hello status update", profile="balanced")
         self.assertIn(result.action, {"allow", "warn", "escalate", "block"})
 
+    def test_fused_score_reflects_rules_and_classifier(self) -> None:
+        safe = self.engine.predict("thanks team for the meeting summary")
+        risky = self.engine.predict("urgent verify account and send otp now click here")
+        self.assertGreater(risky.risk_score, safe.risk_score)
+
 
 if __name__ == "__main__":
     unittest.main()
