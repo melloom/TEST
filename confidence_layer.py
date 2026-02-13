@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Dict, Iterable, List, Tuple
+from typing import Iterable, List, Tuple
 
+from config import EngineConfig, default_config
 from preprocessing import HashingEmbedder, PreprocessedMessage, Preprocessor
 from message_risk import MessageRiskClassifier, default_bootstrap_samples
 from ood_ue import OodUeDetector, OodUeThresholds
@@ -13,48 +14,32 @@ from schema import Prediction, ProfileLabel, validate_profile
 class ConfidenceRiskEngine:
     """Configurable confidence layer with preprocessing and embedding pipeline."""
 
-    _PROFILES: Dict[str, Dict[str, float]] = {
-        "strict": {"ood_threshold": 0.62, "uncertainty_warn_threshold": 0.70, "caution": 0.28, "high_risk": 0.62},
-        "balanced": {"ood_threshold": 0.68, "uncertainty_warn_threshold": 0.75, "caution": 0.35, "high_risk": 0.70},
-        "lenient": {"ood_threshold": 0.74, "uncertainty_warn_threshold": 0.80, "caution": 0.45, "high_risk": 0.80},
-    }
-
-    def __init__(self, baseline_messages: Iterable[str] | None = None, embed_dim: int = 128) -> None:
+    def __init__(self, baseline_messages: Iterable[str] | None = None, config: EngineConfig | None = None) -> None:
+        self.config = config or default_config()
         self.preprocessor = Preprocessor()
-        self.embedder = HashingEmbedder(dim=embed_dim)
+        self.embedder = HashingEmbedder(dim=self.config.embed_dim)
 
         if baseline_messages is None:
-            baseline_messages = [
-                "hello thanks update status meeting project docs review",
-                "help question task timeline note summary",
-            ]
+            baseline_messages = self.config.baseline_messages
 
         self._baseline_messages: List[PreprocessedMessage] = []
         self._baseline_vocab: set[str] = set()
         self._baseline_embeddings: List[List[float]] = []
-        self._centroid: List[float] = [0.0] * embed_dim
+        self._centroid: List[float] = [0.0] * self.config.embed_dim
 
         self.fit_reference(baseline_messages)
         self._ood_detectors = {
             name: OodUeDetector(
                 thresholds=OodUeThresholds(
-                    ood_threshold=cfg["ood_threshold"],
-                    uncertainty_warn_threshold=cfg["uncertainty_warn_threshold"],
+                    ood_threshold=cfg.ood_threshold,
+                    uncertainty_warn_threshold=cfg.uncertainty_warn_threshold,
                 )
             )
-            for name, cfg in self._PROFILES.items()
+            for name, cfg in self.config.profiles.items()
         }
 
-        self._risk_classifier = MessageRiskClassifier(embed_dim=embed_dim)
+        self._risk_classifier = MessageRiskClassifier(embed_dim=self.config.embed_dim)
         self._risk_classifier.fit(default_bootstrap_samples(), lr=0.4, epochs=40)
-
-        self._high_risk_patterns: List[Tuple[str, str, float]] = [
-            (r"\b(password|otp|one\s*time\s*passcode|2fa\s*code)\b", "requests sensitive authentication information", 0.42),
-            (r"\b(urgent|immediately|asap|right\s*now)\b", "uses urgency language", 0.16),
-            (r"\b(click\s+here|verify\s+account|suspend(?:ed)?\s+account)\b", "contains phishing-style call to action", 0.32),
-            (r"\b(bitcoin|gift\s*card|wire\s*transfer|bank\s*account)\b", "references payment transfer patterns", 0.34),
-            (r"\b(ssn|social\s*security|credit\s*card|cvv)\b", "asks for private personal data", 0.46),
-        ]
 
     def fit_reference(self, messages: Iterable[str]) -> None:
         processed = [self.preprocessor.process(m) for m in messages if m.strip()]
@@ -73,7 +58,7 @@ class ConfidenceRiskEngine:
 
     def predict(self, text: str, profile: str = "balanced") -> Prediction:
         selected: ProfileLabel = validate_profile(profile)
-        cfg = self._PROFILES[selected]
+        cfg = self.config.profiles[selected]
 
         msg = self.preprocessor.process(text)
         embedding = self.embedder.embed_tokens(msg.tokens)
@@ -86,16 +71,15 @@ class ConfidenceRiskEngine:
         if ood_reason:
             reasons.insert(0, ood_reason)
 
-        risk_label = self._risk_label(fused_risk_score, caution=cfg["caution"], high_risk=cfg["high_risk"])
-        warn_threshold = self._ood_detectors[selected].thresholds.uncertainty_warn_threshold
-        action = self._action(risk_label, is_ood, uncertainty, warn_threshold)
+        risk_label = self._risk_label(fused_risk_score, caution=cfg.caution, high_risk=cfg.high_risk)
+        action = self._action(risk_label, is_ood, uncertainty, cfg.uncertainty_warn_threshold)
 
         return Prediction(
             is_ood=is_ood,
             uncertainty_score=uncertainty,
             risk_label=risk_label,
             risk_score=fused_risk_score,
-            reasons=reasons or ["no strong risk signals were found"],
+            reasons=reasons or ["No strong risk signals were detected in this message."],
             action=action,
             profile=selected,
         )
@@ -103,7 +87,7 @@ class ConfidenceRiskEngine:
     def _ood_uncertainty(self, tokens: List[str], embedding: List[float], profile: ProfileLabel):
         if not tokens:
             eval_result = self._ood_detectors[profile].evaluate(0.0, 1.0)
-            return eval_result, "input is empty or unparseable"
+            return eval_result, "The input is empty or could not be parsed into meaningful text."
 
         overlap = len(set(tokens) & self._baseline_vocab)
         overlap_ratio = overlap / max(len(set(tokens)), 1)
@@ -118,9 +102,8 @@ class ConfidenceRiskEngine:
         uncertainty_raw = (1.0 - in_domain_raw) * 0.85 + (1.0 - alpha_ratio) * 0.15
 
         eval_result = self._ood_detectors[profile].evaluate(in_domain_raw, uncertainty_raw)
-        reason = "" if not eval_result.is_ood else "low reference similarity in vocabulary/embedding space"
+        reason = "" if not eval_result.is_ood else "This input is far from the current reference examples in wording and semantic space."
         return eval_result, reason
-
 
     def fit_ood_thresholds(self, profile: str, id_in_domain_scores: List[float], target_tpr: float = 0.95) -> None:
         selected = validate_profile(profile)
@@ -130,37 +113,51 @@ class ConfidenceRiskEngine:
         selected = validate_profile(profile)
         self._ood_detectors[selected].fit_calibrator(id_scores, ood_scores)
 
+    def get_runtime_config(self) -> dict:
+        return {
+            "config_version": self.config.config_version,
+            "embed_dim": self.config.embed_dim,
+            "profiles": {
+                name: {
+                    "ood_threshold": p.ood_threshold,
+                    "uncertainty_warn_threshold": p.uncertainty_warn_threshold,
+                    "caution": p.caution,
+                    "high_risk": p.high_risk,
+                }
+                for name, p in self.config.profiles.items()
+            },
+        }
+
     def _risk_score(self, msg: PreprocessedMessage) -> Tuple[float, List[str]]:
         lowered = msg.normalized
         rule_score = 0.0
         reasons: List[str] = []
 
-        for pattern, reason, weight in self._high_risk_patterns:
+        for pattern, reason, weight in self.config.high_risk_patterns:
             if re.search(pattern, lowered):
                 rule_score += weight
                 reasons.append(reason)
 
         if len(msg.raw) > 280:
             rule_score += 0.05
-            reasons.append("long-form message can hide mixed intent")
+            reasons.append("This is a long message, which can hide mixed or manipulative intent.")
 
         punctuation_burst = msg.raw.count("!") + msg.raw.count("?")
         if punctuation_burst >= 4:
             rule_score += 0.10
-            reasons.append("high punctuation intensity")
+            reasons.append("The message uses unusually intense punctuation pressure.")
 
         if re.search(r"<url>", lowered) and re.search(r"\b(login|verify|account|secure)\b", lowered):
             rule_score += 0.15
-            reasons.append("link combined with account-security prompt")
+            reasons.append("A link is combined with account-security language, which is a common phishing pattern.")
 
         rule_prob = self._clamp(1 - math.exp(-rule_score))
         clf_prob = self._risk_classifier.predict_score_from_message(msg)
 
-        # fused score: classifier captures semantic context; rules enforce explicit safety signals
         fused = self._clamp(0.6 * clf_prob + 0.4 * rule_prob)
 
-        if clf_prob >= 0.65 and "classifier semantic risk signal" not in reasons:
-            reasons.append("classifier semantic risk signal")
+        if clf_prob >= 0.65 and "The classifier detected a strong semantic risk pattern in the message." not in reasons:
+            reasons.append("The classifier detected a strong semantic risk pattern in the message.")
 
         return fused, reasons
 

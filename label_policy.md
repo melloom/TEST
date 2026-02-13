@@ -67,3 +67,16 @@ Each prediction MUST return:
   - OoD accuracy,
   - counts for risk FP/FN and OoD FP/FN.
 - Error analysis output must include concrete FP/FN examples for threshold tuning.
+
+
+## API + logging + versioned config policy
+
+- API exposes both schema and config versions for reproducibility: `schema_version` and `config_version`.
+- Runtime config endpoint (`GET /config`) provides active profile thresholds and embedder settings.
+- Request logging should capture path, profile, outcome summary, and latency for operational debugging.
+
+## Human-readable reason-string policy
+
+- Reasons should be plain-language sentences understandable by non-ML users.
+- Avoid purely technical shorthand in user-facing reasons.
+- At least one reason is always returned; fallback reason is used when no strong signal is found.

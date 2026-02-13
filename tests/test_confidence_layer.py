@@ -52,6 +52,18 @@ class ConfidenceLayerTests(unittest.TestCase):
         risky = self.engine.predict("urgent verify account and send otp now click here")
         self.assertGreater(risky.risk_score, safe.risk_score)
 
+    def test_human_readable_reason_strings(self) -> None:
+        result = self.engine.predict("urgent verify account and send otp now click here")
+        self.assertTrue(result.reasons)
+        for reason in result.reasons:
+            self.assertIsInstance(reason, str)
+            self.assertGreater(len(reason.strip()), 8)
+
+    def test_runtime_config_has_version(self) -> None:
+        cfg = self.engine.get_runtime_config()
+        self.assertEqual(cfg["config_version"], "1.0.0")
+        self.assertIn("balanced", cfg["profiles"])
+
 
 if __name__ == "__main__":
     unittest.main()

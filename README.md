@@ -7,10 +7,13 @@ Confidence layer v1 with:
 - dedicated OoD/UE module with calibration + threshold fitting
 - message-risk classifier + rule signals fused into one risk score
 - evaluation harness with dashboard summary and FP/FN error analysis
+- API logging + versioned runtime configuration
+- human-readable reason strings for model decisions
 
 ## Files
 
 - `schema.py`: canonical response contract and typed prediction payload.
+- `config.py`: versioned engine config with profile thresholds and risk-rule catalog.
 - `label_policy.md`: label/action policy and threshold profile definitions.
 - `preprocessing.py`: text preprocessing and embedding pipeline.
 - `ood_ue.py`: dedicated OoD/UE detector, calibrator, and threshold fitting utilities.
@@ -29,8 +32,21 @@ Server endpoints:
 
 - `GET /health`
 - `GET /schema`
+- `GET /config`
 - `POST /predict-confidence-risk`
 - `POST /evaluate`
+
+`/schema` includes both `schema_version` and `config_version`.
+`/config` returns active profile thresholds and embedder dimension for runtime traceability.
+
+## Logging
+
+Request-level logs are emitted with:
+- endpoint path
+- selected profile
+- prediction summary (`risk_label`, `is_ood`) for inference requests
+- sample count for evaluation requests
+- request duration in milliseconds
 
 ## Calibration + thresholds (hardened defaults)
 
