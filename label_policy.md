@@ -80,3 +80,15 @@ Each prediction MUST return:
 - Reasons should be plain-language sentences understandable by non-ML users.
 - Avoid purely technical shorthand in user-facing reasons.
 - At least one reason is always returned; fallback reason is used when no strong signal is found.
+
+
+## Production tuning policy
+
+- Thresholds should be tuned on labeled validation sets using target ID TPR and high-risk precision targets.
+- Use `tuning.py` to derive profile-specific `ood_threshold`, `uncertainty_warn_threshold`, `caution`, and `high_risk` values.
+- Persist and audit tuned values through versioned config (`config_version`) and runtime config endpoint (`GET /config`).
+
+## Reuse packaging policy
+
+- Reuse the same confidence engine across message, mood, code, and assistant domains to keep one confidence contract.
+- Domain wrappers may attach lightweight metadata (for example `domain`) but must preserve the core schema fields.

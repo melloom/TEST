@@ -84,6 +84,21 @@ class ConfidenceRiskEngine:
             profile=selected,
         )
 
+    def score_message(self, text: str, profile: str = "balanced") -> dict:
+        """Return score components useful for offline tuning and diagnostics."""
+        selected: ProfileLabel = validate_profile(profile)
+        msg = self.preprocessor.process(text)
+        embedding = self.embedder.embed_tokens(msg.tokens)
+        ood_eval, _ = self._ood_uncertainty(msg.tokens, embedding, selected)
+        risk_score, _ = self._risk_score(msg)
+        return {
+            "in_domain_score": ood_eval.in_domain_score,
+            "uncertainty_score": ood_eval.uncertainty_score,
+            "risk_score": risk_score,
+            "is_ood": ood_eval.is_ood,
+            "profile": selected,
+        }
+
     def _ood_uncertainty(self, tokens: List[str], embedding: List[float], profile: ProfileLabel):
         if not tokens:
             eval_result = self._ood_detectors[profile].evaluate(0.0, 1.0)
@@ -127,6 +142,24 @@ class ConfidenceRiskEngine:
                 for name, p in self.config.profiles.items()
             },
         }
+
+    def apply_profile_thresholds(
+        self,
+        profile: str,
+        ood_threshold: float,
+        uncertainty_warn_threshold: float,
+        caution: float,
+        high_risk: float,
+    ) -> None:
+        selected = validate_profile(profile)
+        cfg = self.config.profiles[selected]
+        cfg.ood_threshold = self._clamp(ood_threshold)
+        cfg.uncertainty_warn_threshold = self._clamp(uncertainty_warn_threshold)
+        cfg.caution = self._clamp(caution)
+        cfg.high_risk = self._clamp(high_risk)
+
+        self._ood_detectors[selected].thresholds.ood_threshold = cfg.ood_threshold
+        self._ood_detectors[selected].thresholds.uncertainty_warn_threshold = cfg.uncertainty_warn_threshold
 
     def _risk_score(self, msg: PreprocessedMessage) -> Tuple[float, List[str]]:
         lowered = msg.normalized

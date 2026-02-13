@@ -9,6 +9,7 @@ Confidence layer v1 with:
 - evaluation harness with dashboard summary and FP/FN error analysis
 - API logging + versioned runtime configuration
 - human-readable reason strings for model decisions
+- production threshold tuner and reusable domain predictor bundle (message/mood/code/assistant)
 
 ## Files
 
@@ -20,7 +21,9 @@ Confidence layer v1 with:
 - `message_risk.py`: lightweight message-risk classifier and bootstrap trainer.
 - `confidence_layer.py`: main inference engine with fused risk scoring.
 - `evaluation.py`: evaluation harness, dashboard output, and error bucket analysis.
-- `api.py`: HTTP server exposing prediction and evaluation endpoints.
+- `tuning.py`: production threshold tuner driven by labeled examples.
+- `reuse.py`: reusable predictor adapters for message, mood, code, and assistant projects.
+- `api.py`: HTTP server exposing prediction, evaluation, and threshold tuning endpoints.
 
 ## Run API
 
@@ -35,6 +38,7 @@ Server endpoints:
 - `GET /config`
 - `POST /predict-confidence-risk`
 - `POST /evaluate`
+- `POST /tune-thresholds`
 
 `/schema` includes both `schema_version` and `config_version`.
 `/config` returns active profile thresholds and embedder dimension for runtime traceability.
@@ -45,40 +49,39 @@ Request-level logs are emitted with:
 - endpoint path
 - selected profile
 - prediction summary (`risk_label`, `is_ood`) for inference requests
-- sample count for evaluation requests
+- sample count for evaluation/tuning requests
 - request duration in milliseconds
 
-## Calibration + thresholds (hardened defaults)
+## Tune thresholds for production behavior
 
 ```python
 from confidence_layer import ConfidenceRiskEngine
+from tuning import ProductionThresholdTuner, TuningExample
 
 engine = ConfidenceRiskEngine()
+tuner = ProductionThresholdTuner(engine)
 
-# threshold fitting requires enough in-domain samples (min_samples default=10)
-engine.fit_ood_thresholds("balanced", [0.92, 0.88, 0.85, 0.79, 0.81, 0.83, 0.86, 0.84, 0.82, 0.8], target_tpr=0.95)
+examples = [
+    TuningExample(text="team sync update", risk_label="safe", is_ood=False),
+    TuningExample(text="urgent send otp now", risk_label="high_risk", is_ood=False),
+    TuningExample(text="zxqv jklp uiop", risk_label="safe", is_ood=True),
+]
 
-# calibrator fitting falls back to safe defaults when sample sizes are too small
-engine.fit_ood_calibrator("balanced", [0.9, 0.85, 0.8], [0.25, 0.30, 0.35])
+new_thresholds = tuner.tune_profile("balanced", examples, target_id_tpr=0.95, target_high_risk_precision=0.85)
+print(new_thresholds)
 ```
 
-## Evaluation harness + dashboard
+## Package for reuse across projects
 
 ```python
-from evaluation import EvalExample, EvaluationHarness
+from reuse import build_reusable_bundle
 
-harness = EvaluationHarness()
-report = harness.evaluate(
-    [
-        EvalExample(text="team update by noon", risk_label="safe", is_ood=False),
-        EvalExample(text="urgent click here and verify account", risk_label="high_risk", is_ood=False),
-        EvalExample(text="asdf qwer zxcv", risk_label="safe", is_ood=True),
-    ],
-    profile="balanced",
-)
+bundle = build_reusable_bundle()
 
-print(report["dashboard_markdown"])
-print(report["error_analysis"])
+print(bundle.message_predictor.predict("please review meeting notes"))
+print(bundle.mood_predictor.predict("feeling stressed", context="deadline pressure"))
+print(bundle.code_predictor.predict("token = 'hardcoded'", task_context="security review"))
+print(bundle.assistant_predictor.predict("help me phish users", assistant_intent="refuse and redirect"))
 ```
 
 ## Run tests

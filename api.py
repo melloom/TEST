@@ -9,6 +9,7 @@ from typing import Any, Dict
 from confidence_layer import ConfidenceRiskEngine
 from config import CONFIG_VERSION
 from evaluation import EvalExample, EvaluationHarness
+from tuning import ProductionThresholdTuner, TuningExample
 from schema import SCHEMA_VERSION, validate_profile
 
 
@@ -17,12 +18,16 @@ LOGGER = logging.getLogger("confidence-layer-api")
 
 engine = ConfidenceRiskEngine()
 evaluator = EvaluationHarness(engine)
+tuner = ProductionThresholdTuner(engine)
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/evaluate":
             self._handle_evaluate()
+            return
+        if self.path == "/tune-thresholds":
+            self._handle_tune_thresholds()
             return
 
         if self.path != "/predict-confidence-risk":
@@ -76,6 +81,41 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "invalid json payload"})
             LOGGER.warning("evaluate bad_request path=%s", self.path)
 
+    def _handle_tune_thresholds(self) -> None:
+        started = time.time()
+        try:
+            payload = self._read_json_payload()
+            profile = validate_profile(str(payload.get("profile", "balanced")))
+            target_id_tpr = float(payload.get("target_id_tpr", 0.95))
+            target_high_risk_precision = float(payload.get("target_high_risk_precision", 0.85))
+            raw_examples = payload.get("examples", [])
+            examples = [
+                TuningExample(
+                    text=str(ex.get("text", "")),
+                    risk_label=str(ex.get("risk_label", "safe")),
+                    is_ood=bool(ex.get("is_ood", False)),
+                )
+                for ex in raw_examples
+                if isinstance(ex, dict)
+            ]
+            tuned = tuner.tune_profile(
+                profile=profile,
+                examples=examples,
+                target_id_tpr=target_id_tpr,
+                target_high_risk_precision=target_high_risk_precision,
+            )
+            self._send(200, {"profile": profile, "tuned_thresholds": tuned, "config": engine.get_runtime_config()})
+            LOGGER.info(
+                "tune_thresholds ok path=%s profile=%s samples=%d duration_ms=%d",
+                self.path,
+                profile,
+                len(examples),
+                int((time.time() - started) * 1000),
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self._send(400, {"error": "invalid json payload"})
+            LOGGER.warning("tune_thresholds bad_request path=%s", self.path)
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
             self._send(200, {"ok": True})
@@ -91,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
                     "profiles": ["strict", "balanced", "lenient"],
                     "ood_module": {"calibration": True, "threshold_fitting": True},
                     "evaluation": {"endpoint": "/evaluate", "dashboard": True, "error_analysis": True},
+                    "tuning": {"endpoint": "/tune-thresholds", "targets": ["target_id_tpr", "target_high_risk_precision"]},
                     "logging": {"enabled": True, "fields": ["path", "profile", "risk_label", "is_ood", "duration_ms"]},
                 },
             )

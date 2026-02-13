@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 CONFIG_VERSION = "1.0.0"
 
 
-@dataclass(frozen=True)
+@dataclass
 class ProfileThresholds:
     ood_threshold: float
     uncertainty_warn_threshold: float
@@ -15,7 +15,7 @@ class ProfileThresholds:
     high_risk: float
 
 
-@dataclass(frozen=True)
+@dataclass
 class EngineConfig:
     config_version: str = CONFIG_VERSION
     embed_dim: int = 128
