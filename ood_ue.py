@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, List, Sequence
+
+
+_MIN_EPS = 1e-6
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
 
 
 @dataclass
@@ -17,6 +24,10 @@ class OodUeThresholds:
     ood_threshold: float
     uncertainty_warn_threshold: float
 
+    def __post_init__(self) -> None:
+        self.ood_threshold = _clamp01(self.ood_threshold)
+        self.uncertainty_warn_threshold = _clamp01(self.uncertainty_warn_threshold)
+
 
 class OodUeCalibrator:
     """Simple affine calibrator for in-domain score and uncertainty."""
@@ -24,29 +35,36 @@ class OodUeCalibrator:
     def __init__(self, alpha: float = 1.0, beta: float = 0.0, temperature: float = 1.0) -> None:
         self.alpha = alpha
         self.beta = beta
-        self.temperature = max(1e-6, temperature)
+        self.temperature = max(_MIN_EPS, temperature)
 
     def calibrate_in_domain(self, raw_score: float) -> float:
+        raw_score = _clamp01(raw_score)
         logits = self.alpha * raw_score + self.beta
         scaled = logits / self.temperature
-        return self._clamp(self._sigmoid(scaled))
+        return _clamp01(self._sigmoid(scaled))
 
     def calibrate_uncertainty(self, raw_uncertainty: float) -> float:
-        # keep monotonic shape while allowing smoothing via temperature
+        raw_uncertainty = _clamp01(raw_uncertainty)
         centered = (raw_uncertainty - 0.5) / self.temperature + 0.5
-        return self._clamp(centered)
+        return _clamp01(centered)
 
     @staticmethod
     def fit_from_scores(id_scores: Sequence[float], ood_scores: Sequence[float]) -> "OodUeCalibrator":
-        """Choose simple beta shift that separates ID and OOD means."""
-        if not id_scores or not ood_scores:
+        """Fit robust defaults from score means with bounded temperature."""
+        if len(id_scores) < 2 or len(ood_scores) < 2:
             return OodUeCalibrator()
+
+        id_scores = [_clamp01(s) for s in id_scores]
+        ood_scores = [_clamp01(s) for s in ood_scores]
+
         id_mean = sum(id_scores) / len(id_scores)
         ood_mean = sum(ood_scores) / len(ood_scores)
-        midpoint = (id_mean + ood_mean) / 2
+
+        midpoint = (id_mean + ood_mean) / 2.0
         beta = -midpoint
-        spread = max(1e-3, abs(id_mean - ood_mean))
-        temperature = max(0.25, min(2.0, 0.5 / spread))
+
+        spread = max(_MIN_EPS, abs(id_mean - ood_mean))
+        temperature = max(0.5, min(1.5, 0.5 / spread))
         return OodUeCalibrator(alpha=1.0, beta=beta, temperature=temperature)
 
     @staticmethod
@@ -56,10 +74,6 @@ class OodUeCalibrator:
             return 1 / (1 + z)
         z = math.exp(x)
         return z / (1 + z)
-
-    @staticmethod
-    def _clamp(value: float) -> float:
-        return max(0.0, min(1.0, value))
 
 
 class OodUeDetector:
@@ -77,12 +91,16 @@ class OodUeDetector:
             is_ood=is_ood,
         )
 
-    def fit_thresholds(self, id_scores: Iterable[float], target_tpr: float = 0.95) -> None:
-        sorted_scores = sorted(id_scores)
-        if not sorted_scores:
+    def fit_thresholds(self, id_scores: Iterable[float], target_tpr: float = 0.95, min_samples: int = 10) -> None:
+        safe_target_tpr = _clamp01(target_tpr)
+        sorted_scores = sorted(_clamp01(s) for s in id_scores)
+        if len(sorted_scores) < max(1, min_samples):
             return
-        n = len(sorted_scores)
-        idx = max(0, min(n - 1, int((1 - target_tpr) * (n - 1))))
+
+        # Lower quantile to preserve desired true-positive rate on in-domain examples.
+        q = 1.0 - safe_target_tpr
+        idx = int(round(q * (len(sorted_scores) - 1)))
+        idx = max(0, min(len(sorted_scores) - 1, idx))
         self.thresholds.ood_threshold = sorted_scores[idx]
 
     def fit_calibrator(self, id_scores: Sequence[float], ood_scores: Sequence[float]) -> None:

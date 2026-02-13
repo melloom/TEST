@@ -5,14 +5,20 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict
 
 from confidence_layer import ConfidenceRiskEngine
+from evaluation import EvalExample, EvaluationHarness
 from schema import SCHEMA_VERSION, validate_profile
 
 
 engine = ConfidenceRiskEngine()
+evaluator = EvaluationHarness(engine)
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/evaluate":
+            self._handle_evaluate()
+            return
+
         if self.path != "/predict-confidence-risk":
             self._send(404, {"error": "not found"})
             return
@@ -29,6 +35,28 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             self._send(400, {"error": "invalid json payload"})
 
+    def _handle_evaluate(self) -> None:
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(content_length)
+            payload: Dict[str, Any] = json.loads(raw.decode("utf-8"))
+
+            profile = validate_profile(str(payload.get("profile", "balanced")))
+            raw_examples = payload.get("examples", [])
+            examples = [
+                EvalExample(
+                    text=str(ex.get("text", "")),
+                    risk_label=str(ex.get("risk_label", "safe")),
+                    is_ood=bool(ex.get("is_ood", False)),
+                )
+                for ex in raw_examples
+                if isinstance(ex, dict)
+            ]
+            report = evaluator.evaluate(examples, profile=profile)
+            self._send(200, report)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self._send(400, {"error": "invalid json payload"})
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
             self._send(200, {"ok": True})
@@ -42,6 +70,7 @@ class Handler(BaseHTTPRequestHandler):
                     "actions": ["allow", "warn", "block", "escalate"],
                     "profiles": ["strict", "balanced", "lenient"],
                     "ood_module": {"calibration": True, "threshold_fitting": True},
+                    "evaluation": {"endpoint": "/evaluate", "dashboard": True, "error_analysis": True},
                 },
             )
             return

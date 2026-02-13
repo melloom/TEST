@@ -122,11 +122,13 @@ class ConfidenceRiskEngine:
         return eval_result, reason
 
 
-    def fit_ood_thresholds(self, profile: ProfileLabel, id_in_domain_scores: List[float], target_tpr: float = 0.95) -> None:
-        self._ood_detectors[profile].fit_thresholds(id_in_domain_scores, target_tpr=target_tpr)
+    def fit_ood_thresholds(self, profile: str, id_in_domain_scores: List[float], target_tpr: float = 0.95) -> None:
+        selected = validate_profile(profile)
+        self._ood_detectors[selected].fit_thresholds(id_in_domain_scores, target_tpr=target_tpr)
 
-    def fit_ood_calibrator(self, profile: ProfileLabel, id_scores: List[float], ood_scores: List[float]) -> None:
-        self._ood_detectors[profile].fit_calibrator(id_scores, ood_scores)
+    def fit_ood_calibrator(self, profile: str, id_scores: List[float], ood_scores: List[float]) -> None:
+        selected = validate_profile(profile)
+        self._ood_detectors[selected].fit_calibrator(id_scores, ood_scores)
 
     def _risk_score(self, msg: PreprocessedMessage) -> Tuple[float, List[str]]:
         lowered = msg.normalized

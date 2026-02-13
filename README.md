@@ -6,6 +6,7 @@ Confidence layer v1 with:
 - deterministic dependency-free embedding pipeline (stable hashed embeddings)
 - dedicated OoD/UE module with calibration + threshold fitting
 - message-risk classifier + rule signals fused into one risk score
+- evaluation harness with dashboard summary and FP/FN error analysis
 
 ## Files
 
@@ -15,7 +16,8 @@ Confidence layer v1 with:
 - `ood_ue.py`: dedicated OoD/UE detector, calibrator, and threshold fitting utilities.
 - `message_risk.py`: lightweight message-risk classifier and bootstrap trainer.
 - `confidence_layer.py`: main inference engine with fused risk scoring.
-- `api.py`: HTTP server exposing prediction endpoint.
+- `evaluation.py`: evaluation harness, dashboard output, and error bucket analysis.
+- `api.py`: HTTP server exposing prediction and evaluation endpoints.
 
 ## Run API
 
@@ -28,15 +30,39 @@ Server endpoints:
 - `GET /health`
 - `GET /schema`
 - `POST /predict-confidence-risk`
+- `POST /evaluate`
 
-## Calibration + thresholds
+## Calibration + thresholds (hardened defaults)
 
 ```python
 from confidence_layer import ConfidenceRiskEngine
 
 engine = ConfidenceRiskEngine()
-engine.fit_ood_thresholds("balanced", [0.92, 0.88, 0.85, 0.79], target_tpr=0.95)
+
+# threshold fitting requires enough in-domain samples (min_samples default=10)
+engine.fit_ood_thresholds("balanced", [0.92, 0.88, 0.85, 0.79, 0.81, 0.83, 0.86, 0.84, 0.82, 0.8], target_tpr=0.95)
+
+# calibrator fitting falls back to safe defaults when sample sizes are too small
 engine.fit_ood_calibrator("balanced", [0.9, 0.85, 0.8], [0.25, 0.30, 0.35])
+```
+
+## Evaluation harness + dashboard
+
+```python
+from evaluation import EvalExample, EvaluationHarness
+
+harness = EvaluationHarness()
+report = harness.evaluate(
+    [
+        EvalExample(text="team update by noon", risk_label="safe", is_ood=False),
+        EvalExample(text="urgent click here and verify account", risk_label="high_risk", is_ood=False),
+        EvalExample(text="asdf qwer zxcv", risk_label="safe", is_ood=True),
+    ],
+    profile="balanced",
+)
+
+print(report["dashboard_markdown"])
+print(report["error_analysis"])
 ```
 
 ## Run tests

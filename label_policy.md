@@ -26,7 +26,11 @@ Each prediction MUST return:
 - OoD is produced by a dedicated `OodUeDetector` over calibrated in-domain score.
 - Uncertainty is independently calibrated (`OodUeCalibrator`) and compared with `uncertainty_warn_threshold`.
 - Each profile has explicit `ood_threshold` and `uncertainty_warn_threshold`.
-- Thresholds can be fit with ID scores using target TPR.
+- Threshold fitting uses lower quantile from in-domain calibration scores, keyed by target TPR.
+- Safety hardening rules:
+  - all score and threshold values are clamped into `[0, 1]`,
+  - calibrator/threshold fitting gracefully no-ops when sample count is too small,
+  - calibrator temperature is bounded to avoid extreme over/under calibration.
 
 ## Label policy
 
@@ -54,3 +58,12 @@ Each prediction MUST return:
 - `safe` + `is_ood=true` + `uncertainty_score > uncertainty_warn_threshold` => `warn`
 - `safe` + `is_ood=true` + `uncertainty_score <= uncertainty_warn_threshold` => `escalate`
 - `safe` + `is_ood=false` => `allow`
+
+## Evaluation harness policy
+
+- Evaluate with labeled examples containing `text`, `risk_label`, and `is_ood`.
+- Primary dashboard metrics:
+  - risk macro-F1,
+  - OoD accuracy,
+  - counts for risk FP/FN and OoD FP/FN.
+- Error analysis output must include concrete FP/FN examples for threshold tuning.
